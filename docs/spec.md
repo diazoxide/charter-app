@@ -42,7 +42,8 @@ When two choices conflict, the higher priority wins.
 - **App**: the desktop GUI. **Core**: the Rust library the app and the CLI share.
   **`charter` binary**: the CLI on PATH, called by hooks, scripts and agents.
 - **Session**: one harness process in one PTY, owned by the core. **Chat**: a session as the
-  UI shows it: its tab, its workspace, its state.
+  UI shows it: its tab, its workspace, its state. **Shell tab**: a chat running the operator's
+  own shell, with no harness and no profile (ADR 0062).
 - **Session state**: `running`, `waiting` (on you), `done`, `failed`, `unknown`. Set only by
   harness hooks, never by reading output.
 - **Python charter**: the current implementation, frozen, and the reference for differential
@@ -102,6 +103,13 @@ When two choices conflict, the higher priority wins.
    - **A chat inherits none of that from charter itself.** charter may be launched from inside
      a harness session, and a chat that inherited its `CLAUDE_PID` would report the launcher's
      identity as its own.
+   - **A harness started by hand in a shell tab is caught by the command that started it, not
+     by anything it prints** (ADR 0062). A shell tab — the operator's own `$SHELL`, no harness,
+     `New shell` beside `New tab` — has charter's shims first on its `PATH`, kept first after
+     zsh's and bash's own start files. `claude`, `codex` or `opencode` typed there runs
+     `charter shell-guard`, which says the harness runs outside charter's session tracking,
+     tells the app over this socket so the tab shows a banner with **Open as chat**, and then
+     runs the real program with the shims off its `PATH`. It moves no chat's state.
 4. **A worktree per writing chat.** The goal is that a chat that writes to a repo gets its own
    git worktree — a **piece** — by default. What ships today is narrower:
    - The explorer lists each clone's pieces under it. Picking one makes the next chat start
@@ -255,10 +263,16 @@ how it is cited and nothing here is renumbered.
     unchanged; the two records are separate because an arrangement spans planes and a plane's
     chats travel with the plane. A plane that has moved or gone is dropped with a line saying
     so, never an error dialog. `--no-restore` starts clean. **ADR 0033.**
+29. **A strip's order is the operator's.** Nothing reorders a strip by itself; the operator can
+    drag a tab along its own strip, with the pointer or the keyboard, and a drop across the
+    pinned tabs' boundary pins or unpins it. Each order is kept where that strip's arrangement
+    already was, on this machine and never committed: projects in the window arrangement of
+    decision 25, workspace pins in the same store, chats in the plane's own
+    `.charter/app/reopen.json`. **ADR 0039, as amended 2026-09-26.**
 
 ### Curation actions — added 2026-09-26
 
-29. **A curation action is a chat opened with its prompt typed and never sent.** The operator
+30. **A curation action is a chat opened with its prompt typed and never sent.** The operator
     reviews the prompt and presses Enter, and nothing can opt out of that. It is offered on a
     workspace, a persona or the plane. charter's own three come first (`charter/safe-remove`,
     `charter/compact` — "Compact & improve" — and `charter/add-curation-action`), ship inside the

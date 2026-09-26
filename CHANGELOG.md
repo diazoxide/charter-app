@@ -21,6 +21,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `personas/<name>/curation/<id>.md`, or with `charter persona curation add`, and
   `charter persona lint` reports one that is broken or that takes a built-in's name. The app's
   Curate menu comes in a later release (ADR 0061).
+- **Plain shell tabs, and a warning when a harness starts inside one.** `New shell` sits beside
+  `New tab` in the palette, on the panes' menu and on each workspace's menu (`New shell in
+  <workspace>`), on ⌘⇧T (Ctrl+Shift+T off a Mac): your own shell, where a new chat would start,
+  with a terminal's mark on its tab. Typing `claude`, `codex` or `opencode` in one still starts
+  it, after one line saying it runs outside charter's session tracking, and the tab shows a
+  banner whose **Open as chat** opens the picker there with that harness picked. Detection is
+  the command being started — charter's shims stand first on a shell tab's `PATH`, and stay
+  first after zsh's and bash's own start files — and nothing reads what the harness prints
+  (ADR 0062).
 - **The harness asks you before `charter report` files an issue.** `charter init` now writes an
   ask rule for `charter report *--yes*` in `.claude/settings.json` and `opencode.json`, beside
   the one for `charter handoff`, so a chat cannot file a public report without your yes.
@@ -224,6 +233,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#369](https://github.com/diazoxide/charter/issues/369))
 
 ### Fixed
+
+- **A chat's terminal scrolls as far as your fingers move, from the first pixel.** A trackpad
+  or wheel now moves the history one row for every row's height of travel, and a harness in
+  full screen — Claude Code's `"tui": "fullscreen"`, opencode — is sent one wheel report per
+  row, what is left over carried to the next event. Before, a slow start barely moved a
+  full-screen harness (one report per ~50 px) and a flick was cut to one report per event, so
+  scrolling felt slow to start and then fast.
 
 - **The prose guards treat a process substitution as the substitution it is.** A `gh` or
   `glab` command that publishes prose, a charter command that persists it, and `charter

@@ -311,6 +311,12 @@ export const commands = {
 	/**  Pins or unpins one workspace inside a project. */
 	pinWorkspace: (plane: PlaneId, workspace: string, pinned: boolean) => typedError<null, string>(__TAURI_INVOKE("pin_workspace", { plane, workspace, pinned })),
 	/**
+	 *  Puts a project's pinned workspaces in the order the operator dragged them into on the
+	 *  workspace strip (SI-6). Only the order moves: a name that is not pinned is passed over, and
+	 *  pinning stays [`pin_workspace`]'s.
+	 */
+	arrangeWorkspacePins: (plane: PlaneId, workspaces: string[]) => typedError<null, string>(__TAURI_INVOKE("arrange_workspace_pins", { plane, workspaces })),
+	/**
 	 *  Pins or unpins one chat.
 	 * 
 	 *  Its own command rather than a third case of the two above, because it is written
@@ -318,6 +324,16 @@ export const commands = {
 	 *  and never in the machine store, which ADR 0034 forbids holding a chat's name.
 	 */
 	pinChat: (plane: PlaneId, session: number, pinned: boolean) => typedError<null, string>(__TAURI_INVOKE("pin_chat", { plane, session, pinned })),
+	/**
+	 *  The order the chat strip draws this project's chats in, by session, so the record lists
+	 *  them in it and the next launch — or a reloaded window — puts them back in it (SI-6).
+	 * 
+	 *  **In the plane's own `.charter/app/reopen.json`, beside each chat's pin**, and never in the
+	 *  machine store, for [`pin_chat`]'s reason: a chat is numbered per plane, and ADR 0034 keeps
+	 *  its number out of a file every plane shares. That file is out of git, so the order is this
+	 *  machine's as a pin is.
+	 */
+	chatOrder: (plane: PlaneId, sessions: number[]) => typedError<null, string>(__TAURI_INVOKE("chat_order", { plane, sessions })),
 	/**
 	 *  Gives one chat a name, or takes the one it was given off with a blank — and answers the name
 	 *  it now has, so the tab draws what charter holds rather than what was typed (charter-app#254).
@@ -1078,6 +1094,26 @@ export type Build =
 { kind: "dev"; of: string } | 
 /**  A version with no section and no prerelease suffix. A local build of `main` is one. */
 { kind: "unlisted" };
+
+/**
+ *  A harness the operator started by hand in a shell tab, as the window draws its banner.
+ * 
+ *  **Nothing about the chat moves.** It is not a state and not a needs-you item: the tab says
+ *  what happened and offers to open that harness as a chat, and the operator's click is what
+ *  does anything.
+ */
+export type ByHand = {
+	plane: PlaneId,
+	/**  The shell tab's chat. */
+	session: number,
+	/**  The harness, by the word the plane calls it — a profile's `kind`. */
+	harness: string,
+	/**
+	 *  Where the shell was standing when it started it, which is where a chat opened in its
+	 *  place starts.
+	 */
+	cwd: string | null,
+};
 
 /**  Everything the chat's gauge draws. Every part is absent when charter does not know it. */
 export type ChatUsage = {

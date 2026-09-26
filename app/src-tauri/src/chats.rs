@@ -131,6 +131,16 @@ pub struct Chats {
     /// chats only because the record is one file and is written whole, in one place, under
     /// [`Self::writing`] — a second writer of `reopen.json` would be two answers racing to disk.
     views: Mutex<Vec<View>>,
+    /// The order the window's strip draws the chats in, by session, as it last said — or, at
+    /// a launch, the order the record listed them in (ADR 0039, as amended by SI-6).
+    ///
+    /// **The window's to say, for the reason [`Self::views`] is**: the operator drags a tab
+    /// there, and nothing here could know it moved. It is held here and not in the window
+    /// because the record is written from here, and because a reloaded window asks this layer
+    /// what is open ([`Self::open_now`]) and has to get the strip back in the order it left it.
+    /// A chat it has not placed yet — one that has just started — comes after the ones it has
+    /// ([`Self::in_order`]).
+    order: Mutex<Vec<u32>>,
     record_it: Recorder,
     /// Held across building a record and handing it over, so two changes at once cannot
     /// write themselves out of order and leave the older one on disk.
@@ -162,6 +172,7 @@ impl Chats {
             front: Mutex::new(None),
             would_not_start: Mutex::new(Vec::new()),
             views: Mutex::new(Vec::new()),
+            order: Mutex::new(Vec::new()),
             record_it,
             writing: Mutex::new(()),
             putting_back: AtomicBool::new(false),
@@ -309,6 +320,9 @@ impl Chats {
     /// decided from the record alone.
     pub fn start(&self, chat: &Chat, size: Size) -> Result<u32, String> {
         let launch = chat.launch();
+        // A shell tab's shims, and the start files that keep them first. Never recorded: they
+        // are this build's, and worked out again at every start.
+        let (args, env) = self.shell_start(chat, &launch.program, launch.args);
         self.open_it(
             chat,
             launch.program,
@@ -316,8 +330,8 @@ impl Chats {
             // command to keep in front: its recorded words follow charter's, as they always
             // have, because they may end in a positional prompt.
             Vec::new(),
-            launch.args,
-            Vec::new(),
+            args,
+            env,
             chat.harness(),
             launch.session.as_ref().map(ToString::to_string),
             launch.how,
@@ -326,6 +340,39 @@ impl Chats {
             &std::collections::BTreeMap::new(),
             size,
         )
+    }
+
+    /// What a shell tab's shell is started with beyond `args`, the chat's own words: charter's
+    /// shims first on its `PATH`, and the start files that keep them first (ADR 0062). A chat
+    /// that is not a shell tab — one on a profile, or one running a harness — gets nothing,
+    /// and nor does any chat in an app that has no shims.
+    fn shell_start(
+        &self,
+        chat: &Chat,
+        program: &str,
+        args: Vec<String>,
+    ) -> (Vec<String>, Vec<(String, String)>) {
+        let Some(shims) = self.shipped.shims.as_ref() else {
+            return (args, Vec::new());
+        };
+        // A shell tab is a chat on no profile running no harness — `open_session` with no
+        // program, and the same chat put back from the record.
+        if chat.profile.is_some() || chat.harness().is_some() {
+            return (args, Vec::new());
+        }
+        // The `PATH` every chat gets, worked out by the one function that works it out, with
+        // the shims put in front of it.
+        let chat_env =
+            charter_core::start::with_chat_path(Vec::new(), self.shipped.binary.as_deref());
+        let start = shims.shell_start(
+            program,
+            chat_env,
+            std::env::var_os("PATH").as_deref(),
+            std::env::var_os("ZDOTDIR").as_deref(),
+        );
+        let mut all = start.args;
+        all.extend(args);
+        (all, start.env)
     }
 
     /// The one place a session is opened and a chat is remembered.
@@ -565,6 +612,40 @@ impl Chats {
         }
     }
 
+    /// What order the window's strip now draws the chats in, by session (SI-6).
+    ///
+    /// Written down when the order the record would list them in moves, and not otherwise —
+    /// for [`Self::pin`]'s reason. Not when the list said differs from the one held: the window
+    /// says it after every change to its tabs, and a chat it has just opened is already last.
+    pub fn hold_order(&self, sessions: Vec<u32>) {
+        let was = self.in_order();
+        *lock(&self.order) = sessions;
+        if self.in_order() != was {
+            self.write_it_down();
+        }
+    }
+
+    /// The running sessions in the strip's order: the ones the window placed, where it placed
+    /// them, then any it has not placed yet in the order they were opened.
+    ///
+    /// **The one answer to "in what order"**, for both the record and a reloaded window, so the
+    /// two cannot disagree about which tab comes first.
+    fn in_order(&self) -> Vec<u32> {
+        let running = self.sessions.running();
+        let placed = lock(&self.order).clone();
+        let mut ordered: Vec<u32> = placed
+            .iter()
+            .copied()
+            .filter(|session| running.contains(session))
+            .collect();
+        ordered.extend(
+            running
+                .into_iter()
+                .filter(|session| !placed.contains(session)),
+        );
+        ordered
+    }
+
     /// Says which chat is in front, so the record knows which one to bring back in front.
     pub fn bring_to_front(&self, session: Option<u32>) {
         let changed = std::mem::replace(&mut *lock(&self.front), session) != session;
@@ -573,14 +654,14 @@ impl Chats {
         }
     }
 
-    /// What is open, in the order the sessions were opened.
+    /// What is open, in the strip's order.
     pub fn open_now(&self) -> Vec<Open> {
+        // In the strip's order (`in_order`), so the window comes back with its tabs the way
+        // they were left. Asked before `open` is held: it takes `order` itself.
+        let ordered = self.in_order();
         let open = lock(&self.open);
         let front = *lock(&self.front);
-        // In the order the sessions were opened, which is the order their ids were handed
-        // out, so the window comes back with its tabs the way they were left.
-        self.sessions
-            .running()
+        ordered
             .into_iter()
             .filter_map(|session| {
                 let running = open.get(&session)?;
@@ -608,6 +689,7 @@ impl Chats {
 
     /// What was open, to write down.
     pub fn record(&self) -> Record {
+        let ordered = self.in_order();
         let open = lock(&self.open);
         let front = *lock(&self.front);
         // The ones that could not be started come first, in the order they were recorded,
@@ -616,7 +698,9 @@ impl Chats {
             .iter()
             .map(|(chat, _)| chat.clone())
             .collect();
-        chats.extend(self.sessions.running().into_iter().filter_map(|session| {
+        // Then the running ones, in the strip's order — which is the order the next launch
+        // puts them back in.
+        chats.extend(ordered.into_iter().filter_map(|session| {
             let chat = &open.get(&session)?.chat;
             Some(Chat {
                 active: front == Some(session),
@@ -686,6 +770,9 @@ impl Chats {
             }
         }
         self.bring_to_front(front);
+        // The strip comes back in the record's order, which is the order it was drawn in when
+        // it was written — not the order of the numbers the chats kept (charter-app#90).
+        *lock(&self.order) = opened.clone();
         // Nothing is written here. What is on disk is the record that was just read, which
         // is still true — and writing what came back would be writing the chats that did
         // not, out of it.
@@ -1238,6 +1325,110 @@ mod tests {
 
         assert_eq!(chats.views(), vec![a_view("steward")]);
         assert!(lock(&wrote).is_empty(), "putting a record back wrote it");
+    }
+
+    /// The names the record lists its chats under, in the order it lists them.
+    fn names_in(record: &Record) -> Vec<String> {
+        record.chats.iter().map(|chat| chat.name.clone()).collect()
+    }
+
+    #[test]
+    fn the_record_lists_the_chats_in_the_order_the_window_arranged_them() {
+        // SI-6: the operator drags a tab, and the strip's order is what comes back at the next
+        // launch — not the order the chats happened to be numbered in.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+        let a = chats.start(&chat(&claude, "a", None), SIZE).unwrap();
+        let b = chats.start(&chat(&claude, "b", None), SIZE).unwrap();
+        let c = chats.start(&chat(&claude, "c", None), SIZE).unwrap();
+
+        chats.hold_order(vec![c, a, b]);
+
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        assert_eq!(names_in(&last), ["c", "a", "b"]);
+        let open: Vec<String> = chats.open_now().into_iter().map(|one| one.name).collect();
+        assert_eq!(
+            open,
+            ["c", "a", "b"],
+            "a reloaded window would draw another order"
+        );
+    }
+
+    #[test]
+    fn saying_the_same_chat_order_again_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+        let a = chats.start(&chat(&claude, "a", None), SIZE).unwrap();
+        let b = chats.start(&chat(&claude, "b", None), SIZE).unwrap();
+        chats.hold_order(vec![b, a]);
+        let so_far = lock(&wrote).len();
+
+        chats.hold_order(vec![b, a]);
+
+        assert_eq!(lock(&wrote).len(), so_far);
+    }
+
+    #[test]
+    fn saying_the_order_the_record_already_has_writes_nothing() {
+        // The window says the order after every change to its tabs, opening a chat included,
+        // and a chat it has just opened is already last in the record.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+        let a = chats.start(&chat(&claude, "a", None), SIZE).unwrap();
+        let b = chats.start(&chat(&claude, "b", None), SIZE).unwrap();
+        let so_far = lock(&wrote).len();
+
+        chats.hold_order(vec![a, b]);
+
+        assert_eq!(lock(&wrote).len(), so_far);
+    }
+
+    #[test]
+    fn a_chat_the_window_has_not_placed_yet_comes_after_the_ones_it_has() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+        let a = chats.start(&chat(&claude, "a", None), SIZE).unwrap();
+        let b = chats.start(&chat(&claude, "b", None), SIZE).unwrap();
+        chats.hold_order(vec![b, a]);
+
+        chats.start(&chat(&claude, "c", None), SIZE).unwrap();
+
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        assert_eq!(names_in(&last), ["b", "a", "c"]);
+    }
+
+    #[test]
+    fn a_record_is_put_back_in_its_own_order_and_not_by_chat_number() {
+        // The record lists the chats in the order the strip drew them, and a chat keeps its
+        // number across a launch (charter-app#90) — so number order is not strip order.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let chats = Chats::new();
+
+        let open = chats.put_back_here(
+            &Record {
+                chats: vec![
+                    Chat {
+                        number: Some(5),
+                        ..chat(&claude, "dragged first", None)
+                    },
+                    Chat {
+                        number: Some(2),
+                        ..chat(&claude, "opened first", None)
+                    },
+                ],
+                ..Default::default()
+            },
+            SIZE,
+        );
+
+        let names: Vec<&str> = open.iter().map(|one| one.name.as_str()).collect();
+        assert_eq!(names, ["dragged first", "opened first"]);
+        assert_eq!(names_in(&chats.record()), ["dragged first", "opened first"]);
     }
 
     #[test]
@@ -2428,6 +2619,7 @@ mod tests {
         chats.arming_with(crate::Shipped {
             binary: Some(root.join("charter")),
             plugin: Some(plugin.clone()),
+            shims: None,
         });
         let ready = charter_core::start::ready(
             &charter_core::start::Start {
@@ -2527,5 +2719,80 @@ mod tests {
         assert_eq!(argv[2], "--settings", "{argv:?}");
         assert_eq!(argv[4], "--session-id", "{argv:?}");
         assert_eq!(argv[6..], ["--name", "ide.7"], "{argv:?}");
+    }
+
+    // --- a shell tab's shims (SI-5, ADR 0062) ---------------------------------------------- //
+
+    fn armed_with_shims() -> Chats {
+        let mut chats = Chats::new();
+        chats.arming_with(crate::Shipped {
+            binary: None,
+            plugin: None,
+            shims: Some(charter_core::shellguard::Shims::at("/app/data/shims")),
+        });
+        chats
+    }
+
+    fn path_of(env: &[(String, String)]) -> Option<&str> {
+        env.iter()
+            .find(|(name, _)| name == "PATH")
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[test]
+    fn a_shell_tab_finds_charters_shims_first_on_its_path() {
+        let chats = armed_with_shims();
+
+        let (args, env) = chats.shell_start(&chat("/bin/sh", "shell", None), "/bin/sh", vec![]);
+
+        assert!(args.is_empty(), "{args:?}");
+        let path = path_of(&env).expect("a PATH");
+        assert!(path.starts_with("/app/data/shims/bin:"), "{path}");
+    }
+
+    #[test]
+    fn a_zsh_shell_tab_is_pointed_at_charters_start_files_and_keeps_its_own_arguments() {
+        let chats = armed_with_shims();
+        let mut shell = chat("/bin/zsh", "shell", None);
+        shell.args = vec!["-l".to_owned()];
+
+        let (args, env) = chats.shell_start(&shell, "/bin/zsh", shell.args.clone());
+
+        assert_eq!(args, ["-l"]);
+        assert!(
+            env.contains(&("ZDOTDIR".to_owned(), "/app/data/shims/zsh".to_owned())),
+            "{env:?}"
+        );
+    }
+
+    #[test]
+    fn a_harness_chat_never_gets_the_shims() {
+        let chats = armed_with_shims();
+
+        let (args, env) = chats.shell_start(&chat("claude", "1", None), "claude", vec![]);
+
+        assert!(args.is_empty());
+        assert!(env.is_empty(), "{env:?}");
+    }
+
+    #[test]
+    fn a_chat_on_a_profile_never_gets_the_shims() {
+        let chats = armed_with_shims();
+        let mut on_a_profile = chat("/usr/local/bin/wrapper", "1", None);
+        on_a_profile.profile = Some("work".to_owned());
+
+        let (_, env) = chats.shell_start(&on_a_profile, "/usr/local/bin/wrapper", vec![]);
+
+        assert!(env.is_empty(), "{env:?}");
+    }
+
+    #[test]
+    fn a_shell_tab_in_an_app_with_no_shims_is_a_plain_shell() {
+        let chats = Chats::new();
+
+        let (args, env) = chats.shell_start(&chat("/bin/zsh", "shell", None), "/bin/zsh", vec![]);
+
+        assert!(args.is_empty());
+        assert!(env.is_empty(), "{env:?}");
     }
 }

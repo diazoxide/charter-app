@@ -86,7 +86,8 @@ _Avoid_: detached tab, pop-out, secondary window
 
 **Strip**:
 One row of tabs: projects (in the title bar), a project's workspaces, or a workspace's chats.
-A strip's order never changes on its own, and it never scrolls.
+A strip's order never changes on its own, and it never scrolls. The operator can drag a tab
+along it; dropped among the pinned tabs it is pinned, and among the others it is unpinned.
 _Avoid_: tab bar, scroller
 
 **Pin**:
@@ -104,6 +105,13 @@ _Avoid_: overflow (in UI text), more tabs
 A chat that is waiting on the operator. Every project's are listed in the title bar's ✋ menu,
 and each is counted in red on its tab and on any show-more hiding it.
 _Avoid_: notification, alert (alerts are a separate drawer)
+
+**Shell tab**:
+A tab running the operator's own shell, with no harness and no profile, opened by `New shell`.
+A harness typed into one runs outside charter's session tracking, so charter's **shell-tab
+shims** stand first on its `PATH`: the harness still starts, after one line saying so, and the
+tab shows a banner offering to open it as a chat instead (ADR 0062).
+_Avoid_: terminal (for the tab), console, plain chat
 
 **Plane updated** (of a chat):
 A chat started before the plane's start-time instructions (`CLAUDE.md`, the harness settings

@@ -257,6 +257,16 @@ body {
   border-inline-end: 1px solid var(--layer-divider);
 }
 
+/* A tab being dragged along its strip (SI-6) passes over its neighbours rather than under them.
+   It keeps its own look: where it will land is the gap the others open for it, which says
+   enough, and a second look for "being dragged" is one more thing to theme. */
+.projects .project[data-dragging],
+.workspaces-strip [role="tab"][data-dragging],
+.tabs .tab[data-dragging] {
+  z-index: 1;
+  cursor: grabbing;
+}
+
 /* A cap, so a strip with two chats on it does not draw two tabs half a window wide. The
    projects have none: the operator asked for *"large full-width segments across the top, each
    taking an equal share"*, and a cap is the one thing that would stop them filling the row. */
@@ -998,6 +1008,42 @@ button.show-more:focus-visible {
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
   opacity: 0.92;
+}
+
+/* **A harness started by hand in a shell tab** (ADR 0062): one line in the pane's top-left
+   corner, over the terminal and taking no row, for the gauge's reason — a pane does not change
+   height because charter has something to say. Bordered in the waiting colour so it reads as
+   charter speaking to the operator and not as the shell's output, and quieter than a needs-you
+   item: nothing is waiting, and the harness is running whatever is pressed. */
+.pane-by-hand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--state-waiting);
+  border-radius: 4px;
+}
+
+.pane-by-hand button {
+  padding: 0 0.4rem;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pane-by-hand button:hover {
+  border-color: var(--accent-base);
+}
+
+.pane-by-hand button.dismiss {
+  color: var(--text-secondary);
+  background: none;
 }
 
 .gauge-ok {
